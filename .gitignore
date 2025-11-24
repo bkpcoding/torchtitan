@@ -15,6 +15,7 @@ wandb
 
 torchtitan/datasets/**/*.model
 
+Mixture-of-Transformers/
 # hf assets
 assets/hf/*
 assets/tokenizer/*
