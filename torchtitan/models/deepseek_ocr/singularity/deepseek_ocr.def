@@ -137,8 +137,9 @@ From: nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
     # Install pip and core tools
     /root/.local/bin/uv pip install --upgrade pip setuptools wheel
 
-    # Install PyTorch with CUDA 12.4 support (nightly for latest features)
-    /root/.local/bin/uv pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu124
+    # Install PyTorch with CUDA 12.4 support
+    # Using pip for PyTorch because uv has issues with nightly dependency resolution
+    /opt/venv/bin/pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 
     # Clone torchtitan repository
     git clone https://github.com/bkpcoding/torchtitan.git /opt/torchtitan
