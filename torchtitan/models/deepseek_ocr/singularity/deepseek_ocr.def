@@ -4,39 +4,85 @@ From: nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
 %labels
     Author bkpcoding
     Version 1.0
-    Description DeepSeek-OCR training container with TorchTitan
+    Description DeepSeek-OCR training container with TorchTitan (venv + uv)
 
 %help
+    DeepSeek-OCR Training Container
+    ===============================
+
     This container provides an environment for training DeepSeek-OCR models
     using the TorchTitan framework.
 
-    Build:
-        sudo singularity build deepseek_ocr.sif deepseek_ocr.def
+    BUILDING THE CONTAINER:
+    -----------------------
+    sudo singularity build deepseek_ocr.sif deepseek_ocr.def
 
-    Run interactively:
-        singularity shell --nv deepseek_ocr.sif
+    # Or without sudo using fakeroot (if enabled):
+    singularity build --fakeroot deepseek_ocr.sif deepseek_ocr.def
 
-    Run training:
-        singularity exec --nv deepseek_ocr.sif python /opt/torchtitan/torchtitan/train.py \
-            --config /opt/torchtitan/torchtitan/models/deepseek_ocr/train_configs/debug.toml
+    RUNNING ON A CLUSTER:
+    ---------------------
+    # Basic execution with GPU support:
+    singularity exec --nv deepseek_ocr.sif python /opt/torchtitan/torchtitan/train.py \
+        --config /opt/torchtitan/torchtitan/models/deepseek_ocr/train_configs/debug.toml
 
-    Multi-GPU training:
-        singularity exec --nv deepseek_ocr.sif torchrun --nproc_per_node=4 \
-            /opt/torchtitan/torchtitan/train.py \
-            --config /opt/torchtitan/torchtitan/models/deepseek_ocr/train_configs/debug.toml
+    # Multi-GPU training:
+    singularity exec --nv deepseek_ocr.sif torchrun --nproc_per_node=4 \
+        /opt/torchtitan/torchtitan/train.py \
+        --config /opt/torchtitan/torchtitan/models/deepseek_ocr/train_configs/debug.toml
+
+    # With data bind-mounted:
+    singularity exec --nv \
+        --bind /path/to/data:/data \
+        --bind /path/to/outputs:/outputs \
+        deepseek_ocr.sif python /opt/torchtitan/torchtitan/train.py \
+        --config /opt/torchtitan/torchtitan/models/deepseek_ocr/train_configs/debug.toml
+
+    SLURM EXAMPLE:
+    --------------
+    #!/bin/bash
+    #SBATCH --job-name=deepseek_ocr
+    #SBATCH --nodes=2
+    #SBATCH --ntasks-per-node=1
+    #SBATCH --gpus-per-node=8
+    #SBATCH --time=24:00:00
+
+    export MASTER_ADDR=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
+    export MASTER_PORT=29500
+
+    srun singularity exec --nv deepseek_ocr.sif \
+        torchrun --nnodes=$SLURM_NNODES --nproc_per_node=8 \
+        --rdzv_backend=c10d --rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT \
+        /opt/torchtitan/torchtitan/train.py \
+        --config /opt/torchtitan/torchtitan/models/deepseek_ocr/train_configs/debug.toml
 
 %environment
-    export LANG=C.UTF-8
-    export LC_ALL=C.UTF-8
-    export PATH=/opt/conda/bin:$PATH
-    export PYTHONPATH=/opt/torchtitan:$PYTHONPATH
+    # CUDA environment
     export CUDA_HOME=/usr/local/cuda
+    export PATH=/usr/local/cuda/bin:$PATH
     export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
 
+    # Python environment
+    export PATH=/opt/venv/bin:$PATH
+    export VIRTUAL_ENV=/opt/venv
+
+    # TorchTitan
+    export PYTHONPATH=/opt/torchtitan:$PYTHONPATH
+
+    # Locale
+    export LANG=C.UTF-8
+    export LC_ALL=C.UTF-8
+
 %post
-    # Update system packages
+    # Prevent interactive prompts during package installation
+    export DEBIAN_FRONTEND=noninteractive
+    export TZ=Etc/UTC
+    ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
+    # Update and install system dependencies
     apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
+        cmake \
         ca-certificates \
         curl \
         git \
@@ -54,6 +100,8 @@ From: nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
         libexpat1-dev \
         liblzma-dev \
         zlib1g-dev \
+        xz-utils \
+        tk-dev \
         libglib2.0-0 \
         libsm6 \
         libxext6 \
@@ -61,35 +109,49 @@ From: nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
         libgl1-mesa-glx \
         && rm -rf /var/lib/apt/lists/*
 
-    # Install Miniconda
-    wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /tmp/miniconda.sh
-    bash /tmp/miniconda.sh -b -p /opt/conda
-    rm /tmp/miniconda.sh
-    export PATH=/opt/conda/bin:$PATH
+    # Install Python 3.11 from source (Ubuntu 22.04 has 3.10 by default)
+    cd /tmp
+    wget https://www.python.org/ftp/python/3.11.9/Python-3.11.9.tgz
+    tar -xzf Python-3.11.9.tgz
+    cd Python-3.11.9
+    ./configure --enable-optimizations --with-ensurepip=install --prefix=/usr/local
+    make -j$(nproc)
+    make install
+    cd /
+    rm -rf /tmp/Python-3.11.9*
 
-    # Create conda environment with Python 3.11
-    conda create -n deepseek_ocr python=3.11 -y
-    echo "source /opt/conda/etc/profile.d/conda.sh && conda activate deepseek_ocr" >> /etc/bash.bashrc
+    # Create symlinks
+    ln -sf /usr/local/bin/python3.11 /usr/local/bin/python3
+    ln -sf /usr/local/bin/python3.11 /usr/local/bin/python
+    ln -sf /usr/local/bin/pip3.11 /usr/local/bin/pip3
+    ln -sf /usr/local/bin/pip3.11 /usr/local/bin/pip
 
-    # Activate environment for installation
-    . /opt/conda/etc/profile.d/conda.sh
-    conda activate deepseek_ocr
+    # Install uv for fast package management
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="/root/.local/bin:$PATH"
+
+    # Create virtual environment
+    /root/.local/bin/uv venv --python 3.11 /opt/venv
+    . /opt/venv/bin/activate
+
+    # Install pip and core tools
+    /root/.local/bin/uv pip install --upgrade pip setuptools wheel
 
     # Install PyTorch with CUDA 12.4 support (nightly for latest features)
-    pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu124
+    /root/.local/bin/uv pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu124
 
     # Clone torchtitan repository
     git clone https://github.com/bkpcoding/torchtitan.git /opt/torchtitan
     cd /opt/torchtitan
 
     # Install torchtitan base dependencies
-    pip install -r requirements.txt
+    /root/.local/bin/uv pip install -r requirements.txt
 
     # Install DeepSeek-OCR specific dependencies
-    pip install -r torchtitan/models/deepseek_ocr/requirements-deepseek-ocr.txt
+    /root/.local/bin/uv pip install -r torchtitan/models/deepseek_ocr/requirements-deepseek-ocr.txt
 
     # Install additional useful packages
-    pip install \
+    /root/.local/bin/uv pip install \
         wandb \
         tensorboard \
         jupyter \
@@ -100,18 +162,26 @@ From: nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
         rich
 
     # Install flash-attention (optional, for faster attention)
-    pip install flash-attn --no-build-isolation || echo "Flash attention installation failed, continuing..."
+    /root/.local/bin/uv pip install flash-attn --no-build-isolation || echo "Flash attention installation failed, continuing..."
 
-    # Clean up
-    conda clean -afy
-    pip cache purge
+    # Copy uv to accessible location
+    cp /root/.local/bin/uv /usr/local/bin/uv
 
     # Create directories for data and outputs
     mkdir -p /data /outputs /checkpoints
 
+    # Clean up
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
+    rm -rf /tmp/Python-3.11.9* /tmp/uv-* /var/tmp/uv-*
+    /root/.local/bin/uv cache clean || true
+
 %runscript
     echo "DeepSeek-OCR Training Container"
     echo "================================"
+    echo "Python: $(python --version)"
+    echo "PyTorch: $(python -c 'import torch; print(torch.__version__)')"
+    echo "CUDA available: $(python -c 'import torch; print(torch.cuda.is_available())')"
     echo ""
     echo "Usage:"
     echo "  Interactive shell: singularity shell --nv deepseek_ocr.sif"
@@ -120,15 +190,12 @@ From: nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
     echo "For multi-GPU training, use torchrun:"
     echo "  singularity exec --nv deepseek_ocr.sif torchrun --nproc_per_node=N /opt/torchtitan/torchtitan/train.py --config <config.toml>"
     echo ""
-    exec /bin/bash "$@"
+    exec "$@"
 
 %test
     # Test Python and PyTorch installation
-    . /opt/conda/etc/profile.d/conda.sh
-    conda activate deepseek_ocr
-
+    python --version
     python -c "import torch; print(f'PyTorch version: {torch.__version__}')"
     python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}')"
     python -c "from torchtitan.models.deepseek_ocr import get_train_spec; print('DeepSeek-OCR import successful!')"
-
     echo "All tests passed!"
