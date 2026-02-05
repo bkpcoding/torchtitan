@@ -67,13 +67,13 @@ pip install --pre torch torchvision --index-url https://download.pytorch.org/whl
 pip install -r requirements.txt
 
 # Install DeepSeek-OCR specific dependencies
-pip install -r torchtitan/experiments/deepseek_ocr/requirements-deepseek-ocr.txt
+pip install -r torchtitan/models/deepseek_ocr/requirements-deepseek-ocr.txt
 ```
 
 ### Verify Installation
 
 ```bash
-python -c "from torchtitan.experiments.deepseek_ocr import get_train_spec; print('DeepSeek-OCR installed successfully!')"
+python -c "from torchtitan.models.deepseek_ocr import get_train_spec; print('DeepSeek-OCR installed successfully!')"
 ```
 
 ## Dataset Setup
@@ -137,13 +137,13 @@ python scripts/download_hf_assets.py --repo_id Qwen/Qwen2-7B --assets tokenizer 
 
 Single GPU:
 ```bash
-python torchtitan/train.py --config torchtitan/experiments/deepseek_ocr/train_configs/debug.toml
+python torchtitan/train.py --config torchtitan/models/deepseek_ocr/train_configs/debug.toml
 ```
 
 Multi-GPU with FSDP:
 ```bash
 torchrun --nproc_per_node=4 torchtitan/train.py \
-    --config torchtitan/experiments/deepseek_ocr/train_configs/debug.toml
+    --config torchtitan/models/deepseek_ocr/train_configs/debug.toml
 ```
 
 ### Configuration Options
@@ -184,14 +184,14 @@ expert_parallel_degree = 1
 **FSDP (Data Parallel):**
 ```bash
 torchrun --nproc_per_node=8 torchtitan/train.py \
-    --config torchtitan/experiments/deepseek_ocr/train_configs/debug.toml \
+    --config torchtitan/models/deepseek_ocr/train_configs/debug.toml \
     --parallelism.data_parallel_shard_degree=-1
 ```
 
 **Expert Parallelism (for MoE layers):**
 ```bash
 torchrun --nproc_per_node=8 torchtitan/train.py \
-    --config torchtitan/experiments/deepseek_ocr/train_configs/debug.toml \
+    --config torchtitan/models/deepseek_ocr/train_configs/debug.toml \
     --parallelism.expert_parallel_degree=2 \
     --parallelism.tensor_parallel_degree=2
 ```
@@ -205,7 +205,7 @@ torchrun \
     --rdzv_backend=c10d \
     --rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT \
     torchtitan/train.py \
-    --config torchtitan/experiments/deepseek_ocr/train_configs/debug.toml
+    --config torchtitan/models/deepseek_ocr/train_configs/debug.toml
 ```
 
 ## Verification
@@ -214,7 +214,7 @@ torchrun \
 
 ```python
 import torch
-from torchtitan.experiments.deepseek_ocr import (
+from torchtitan.models.deepseek_ocr import (
     DeepSeekOCRModelArgs,
     DeepSeekOCRTransformer,
     deepseek_ocr_args,
@@ -236,8 +236,8 @@ print(f"Model created with {sum(p.numel() for p in model.parameters()):,} parame
 ### 2. Verify Attention Masks
 
 ```python
-from torchtitan.experiments.deepseek_ocr.model.query_encoder import QueryEncoder
-from torchtitan.experiments.deepseek_ocr.model.args import QueryEncoderArgs
+from torchtitan.models.deepseek_ocr.model.query_encoder import QueryEncoder
+from torchtitan.models.deepseek_ocr.model.args import QueryEncoderArgs
 
 args = QueryEncoderArgs(hidden_dim=128, num_layers=2, num_heads=4, num_kv_heads=2)
 encoder = QueryEncoder(args)
@@ -262,7 +262,7 @@ print(mask[0, 0, num_image:, :])  # Lower triangular for queries + all images
 ```bash
 # Quick sanity check (10 steps)
 python torchtitan/train.py \
-    --config torchtitan/experiments/deepseek_ocr/train_configs/debug.toml \
+    --config torchtitan/models/deepseek_ocr/train_configs/debug.toml \
     --training.steps=10 \
     --metrics.log_freq=1
 ```
@@ -280,7 +280,7 @@ Loss should decrease over training steps.
 ## Project Structure
 
 ```
-torchtitan/experiments/deepseek_ocr/
+torchtitan/models/deepseek_ocr/
 ├── __init__.py              # TrainSpec registration & model configs
 ├── README.md                # This file
 ├── requirements-deepseek-ocr.txt  # Additional dependencies
