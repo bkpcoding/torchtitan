@@ -1,0 +1,16 @@
+# DeepSeek-OCR experiment dependencies
+# Install with: pip install -r requirements-deepseek-ocr.txt
+
+# Image processing
+pillow>=9.0.0
+torchvision>=0.17.0
+
+# For einops operations (optional, included in base torchtitan)
+einops>=0.7.0
+
+# HuggingFace datasets for OCR data
+datasets>=2.21.0
+
+# Tokenization
+tokenizers>=0.15.0
+transformers>=4.40.0
