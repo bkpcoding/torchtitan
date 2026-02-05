@@ -76,6 +76,29 @@ pip install -r torchtitan/models/deepseek_ocr/requirements-deepseek-ocr.txt
 python -c "from torchtitan.models.deepseek_ocr import get_train_spec; print('DeepSeek-OCR installed successfully!')"
 ```
 
+### Using Singularity Container (HPC)
+
+For HPC environments, we provide a Singularity container with all dependencies pre-installed:
+
+```bash
+# Build the container (requires sudo)
+cd torchtitan/models/deepseek_ocr/singularity
+sudo singularity build deepseek_ocr.sif deepseek_ocr.def
+
+# Run training with GPU support
+singularity exec --nv deepseek_ocr.sif \
+    /opt/conda/envs/deepseek_ocr/bin/python /opt/torchtitan/torchtitan/train.py \
+    --config /opt/torchtitan/torchtitan/models/deepseek_ocr/train_configs/debug.toml
+
+# Multi-GPU training
+singularity exec --nv deepseek_ocr.sif \
+    /opt/conda/envs/deepseek_ocr/bin/torchrun --nproc_per_node=4 \
+    /opt/torchtitan/torchtitan/train.py \
+    --config /opt/torchtitan/torchtitan/models/deepseek_ocr/train_configs/debug.toml
+```
+
+See [singularity/README.md](singularity/README.md) for detailed instructions including SLURM integration.
+
 ## Dataset Setup
 
 ### SynthDOG-EN (Default)
@@ -297,6 +320,9 @@ torchtitan/models/deepseek_ocr/
 ├── datasets/
 │   ├── __init__.py
 │   └── ocr_datasets.py      # OCR dataloader & preprocessing
+├── singularity/
+│   ├── deepseek_ocr.def     # Singularity container definition
+│   └── README.md            # Container build & usage instructions
 └── train_configs/
     └── debug.toml           # Debug training configuration
 ```

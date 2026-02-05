@@ -1,0 +1,134 @@
+Bootstrap: docker
+From: nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
+
+%labels
+    Author bkpcoding
+    Version 1.0
+    Description DeepSeek-OCR training container with TorchTitan
+
+%help
+    This container provides an environment for training DeepSeek-OCR models
+    using the TorchTitan framework.
+
+    Build:
+        sudo singularity build deepseek_ocr.sif deepseek_ocr.def
+
+    Run interactively:
+        singularity shell --nv deepseek_ocr.sif
+
+    Run training:
+        singularity exec --nv deepseek_ocr.sif python /opt/torchtitan/torchtitan/train.py \
+            --config /opt/torchtitan/torchtitan/models/deepseek_ocr/train_configs/debug.toml
+
+    Multi-GPU training:
+        singularity exec --nv deepseek_ocr.sif torchrun --nproc_per_node=4 \
+            /opt/torchtitan/torchtitan/train.py \
+            --config /opt/torchtitan/torchtitan/models/deepseek_ocr/train_configs/debug.toml
+
+%environment
+    export LANG=C.UTF-8
+    export LC_ALL=C.UTF-8
+    export PATH=/opt/conda/bin:$PATH
+    export PYTHONPATH=/opt/torchtitan:$PYTHONPATH
+    export CUDA_HOME=/usr/local/cuda
+    export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+
+%post
+    # Update system packages
+    apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        curl \
+        git \
+        wget \
+        vim \
+        libssl-dev \
+        libffi-dev \
+        libncurses5-dev \
+        libncursesw5-dev \
+        libreadline-dev \
+        libsqlite3-dev \
+        libgdbm-dev \
+        libc6-dev \
+        libbz2-dev \
+        libexpat1-dev \
+        liblzma-dev \
+        zlib1g-dev \
+        libglib2.0-0 \
+        libsm6 \
+        libxext6 \
+        libxrender-dev \
+        libgl1-mesa-glx \
+        && rm -rf /var/lib/apt/lists/*
+
+    # Install Miniconda
+    wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /tmp/miniconda.sh
+    bash /tmp/miniconda.sh -b -p /opt/conda
+    rm /tmp/miniconda.sh
+    export PATH=/opt/conda/bin:$PATH
+
+    # Create conda environment with Python 3.11
+    conda create -n deepseek_ocr python=3.11 -y
+    echo "source /opt/conda/etc/profile.d/conda.sh && conda activate deepseek_ocr" >> /etc/bash.bashrc
+
+    # Activate environment for installation
+    . /opt/conda/etc/profile.d/conda.sh
+    conda activate deepseek_ocr
+
+    # Install PyTorch with CUDA 12.4 support (nightly for latest features)
+    pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu124
+
+    # Clone torchtitan repository
+    git clone https://github.com/bkpcoding/torchtitan.git /opt/torchtitan
+    cd /opt/torchtitan
+
+    # Install torchtitan base dependencies
+    pip install -r requirements.txt
+
+    # Install DeepSeek-OCR specific dependencies
+    pip install -r torchtitan/models/deepseek_ocr/requirements-deepseek-ocr.txt
+
+    # Install additional useful packages
+    pip install \
+        wandb \
+        tensorboard \
+        jupyter \
+        ipython \
+        matplotlib \
+        seaborn \
+        tqdm \
+        rich
+
+    # Install flash-attention (optional, for faster attention)
+    pip install flash-attn --no-build-isolation || echo "Flash attention installation failed, continuing..."
+
+    # Clean up
+    conda clean -afy
+    pip cache purge
+
+    # Create directories for data and outputs
+    mkdir -p /data /outputs /checkpoints
+
+%runscript
+    echo "DeepSeek-OCR Training Container"
+    echo "================================"
+    echo ""
+    echo "Usage:"
+    echo "  Interactive shell: singularity shell --nv deepseek_ocr.sif"
+    echo "  Run training:      singularity exec --nv deepseek_ocr.sif python /opt/torchtitan/torchtitan/train.py --config <config.toml>"
+    echo ""
+    echo "For multi-GPU training, use torchrun:"
+    echo "  singularity exec --nv deepseek_ocr.sif torchrun --nproc_per_node=N /opt/torchtitan/torchtitan/train.py --config <config.toml>"
+    echo ""
+    exec /bin/bash "$@"
+
+%test
+    # Test Python and PyTorch installation
+    . /opt/conda/etc/profile.d/conda.sh
+    conda activate deepseek_ocr
+
+    python -c "import torch; print(f'PyTorch version: {torch.__version__}')"
+    python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}')"
+    python -c "from torchtitan.models.deepseek_ocr import get_train_spec; print('DeepSeek-OCR import successful!')"
+
+    echo "All tests passed!"
