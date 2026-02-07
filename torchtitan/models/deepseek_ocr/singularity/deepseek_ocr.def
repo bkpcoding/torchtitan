@@ -1,5 +1,5 @@
 Bootstrap: docker
-From: nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
+From: nvidia/cuda:12.6.0-cudnn-devel-ubuntu22.04
 
 %labels
     Author bkpcoding
@@ -83,6 +83,7 @@ From: nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
     apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         cmake \
+        ninja-build \
         ca-certificates \
         curl \
         git \
@@ -137,19 +138,23 @@ From: nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
     # Install pip and core tools
     /root/.local/bin/uv pip install --upgrade pip setuptools wheel
 
-    # Install PyTorch with CUDA 12.4 support
-    # Using pip for PyTorch because uv has issues with nightly dependency resolution
-    /opt/venv/bin/pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+    # Install PyTorch with CUDA 12.6 support (nightly for latest features)
+    /root/.local/bin/uv pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/cu126
+
+    # Install flash-attention (optional, for faster attention)
+    /root/.local/bin/uv pip install flash-attn --no-build-isolation || echo "Flash attention installation failed, continuing..."
 
     # Clone torchtitan repository
     git clone https://github.com/bkpcoding/torchtitan.git /opt/torchtitan
     cd /opt/torchtitan
 
+    python3 -c "import torch, torchvision; print(f'torch=={torch.__version__}\ntorchvision=={torchvision.__version__}')" > /tmp/constraints.txt
+
     # Install torchtitan base dependencies
-    /root/.local/bin/uv pip install -r requirements.txt
+    /root/.local/bin/uv pip install -r requirements.txt -c /tmp/constraints.txt
 
     # Install DeepSeek-OCR specific dependencies
-    /root/.local/bin/uv pip install -r torchtitan/models/deepseek_ocr/requirements-deepseek-ocr.txt
+    /root/.local/bin/uv pip install -r torchtitan/models/deepseek_ocr/requirements-deepseek-ocr.txt -c /tmp/constraints.txt
 
     # Install additional useful packages
     /root/.local/bin/uv pip install \
@@ -161,9 +166,6 @@ From: nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
         seaborn \
         tqdm \
         rich
-
-    # Install flash-attention (optional, for faster attention)
-    /root/.local/bin/uv pip install flash-attn --no-build-isolation || echo "Flash attention installation failed, continuing..."
 
     # Copy uv to accessible location
     cp /root/.local/bin/uv /usr/local/bin/uv

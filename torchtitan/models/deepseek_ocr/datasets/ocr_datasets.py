@@ -12,6 +12,8 @@ It supports streaming datasets from HuggingFace.
 """
 
 from dataclasses import asdict
+import os
+import json
 from io import BytesIO
 from typing import Any, Callable, Optional
 
@@ -141,6 +143,11 @@ def _process_synthdog_sample(
     """Process a sample from SynthDOG dataset."""
     # SynthDOG format: {"image": ..., "ground_truth": {"gt_parse": ...}}
     gt = sample.get("ground_truth", {})
+    if isinstance(gt, str):
+        try:
+            gt = json.loads(gt)
+        except json.JSONDecodeError:
+            gt = {}
     text = gt.get("gt_parse", {}).get("text_sequence", "")
 
     return _process_ocr_sample(
@@ -192,7 +199,7 @@ class OCRCollator:
         self.seq_len = seq_len
         self.special_tokens = special_tokens
 
-    def __call__(self, batch: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
+    def __call__(self, batch: list[dict[str, Any]]) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
         """Collate a batch of samples."""
         # Filter out None samples
         batch = [s for s in batch if s is not None]
@@ -218,11 +225,22 @@ class OCRCollator:
             labels.append(lbl)
             pixel_values.append(sample["pixel_values"])
 
-        return {
-            "tokens": torch.stack(input_ids),
-            "labels": torch.stack(labels),
-            "images": torch.stack(pixel_values),
+        input_ids = torch.stack(input_ids)
+        labels = torch.stack(labels)
+        images = torch.stack(pixel_values)
+
+        # Shift for next-token prediction (standard LM objective)
+        input_ids = input_ids[:, :-1]
+        labels = labels[:, 1:]
+
+        if os.getenv("TORCHTITAN_DISABLE_OCR_IMAGES") == "1":
+            images = None
+        input_dict = {
+            "input": input_ids,
+            "images": images,
+            "special_tokens": self.special_tokens,
         }
+        return input_dict, labels
 
 
 class HuggingFaceOCRDataset(IterableDataset, Stateful):

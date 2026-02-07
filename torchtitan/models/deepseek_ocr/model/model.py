@@ -12,6 +12,7 @@ DeepSeek-OCR Transformer model combining:
 """
 
 from typing import cast, Optional
+import os
 
 import torch
 from torch import nn
@@ -57,6 +58,9 @@ def scatter_vision_tokens(
     # The number of <image> tokens should match the number of vision tokens
     num_vision_tokens = vision_tokens.shape[1]
 
+    if vision_tokens.dtype != h.dtype:
+        vision_tokens = vision_tokens.to(h.dtype)
+
     for b in range(B):
         img_positions = torch.where(img_mask[b])[0]
         num_img_positions = img_positions.shape[0]
@@ -101,6 +105,10 @@ class DeepSeekOCRTransformer(DeepSeekV3Model):
         self.projector: Optional[nn.Module] = build_projector(
             model_args.projector, proj_in_dim, proj_out_dim
         )
+
+        if os.getenv("TORCHTITAN_FREEZE_SAM") == "1":
+            for p in self.sam_encoder.parameters():
+                p.requires_grad_(False)
 
     def init_weights(self, buffer_device: torch.device | None = None) -> None:
         """Initialize all model weights."""

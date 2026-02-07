@@ -534,8 +534,26 @@ class Trainer(torch.distributed.checkpoint.stateful.Stateful):
             with self.train_context():
                 with self.maybe_enable_amp:
                     pred = model_parts[0](inputs, **extra_inputs, **extra_kwargs)
+                    if self.step == 1:
+                        has_nan = torch.isnan(pred.float()).any().item()
+                        has_inf = torch.isinf(pred.float()).any().item()
+                        logger.info(
+                            "Pred stats: dtype=%s min=%s max=%s nan=%s inf=%s",
+                            pred.dtype,
+                            pred.float().min().item(),
+                            pred.float().max().item(),
+                            has_nan,
+                            has_inf,
+                        )
                     # Compute loss sum (reduction='sum')
                     loss_sum = self.loss_fn(pred, labels)
+                    if self.step == 1:
+                        logger.info(
+                            "Loss sum stats: value=%s nan=%s inf=%s",
+                            loss_sum.item(),
+                            torch.isnan(loss_sum).item(),
+                            torch.isinf(loss_sum).item(),
+                        )
 
                     # Scale the loss by the inverse of the total weight denominator before backward
                     # This ensures gradients are properly normalized across all microbatches
@@ -547,6 +565,47 @@ class Trainer(torch.distributed.checkpoint.stateful.Stateful):
 
         # The returned loss here is local SUM loss / global_valid_tokens
         return loss
+
+    def _log_batch_stats(
+        self, input_dict: dict[str, torch.Tensor], labels: torch.Tensor
+    ) -> None:
+        if self.parallel_dims.dp_enabled:
+            if self.parallel_dims.get_mesh("batch").get_local_rank() != 0:
+                return
+
+        input_ids = input_dict.get("input")
+        images = input_dict.get("images")
+        if images is None:
+            images = input_dict.get("pixel_values")
+
+        if input_ids is not None:
+            ignore_ratio = (labels == IGNORE_INDEX).float().mean().item()
+            logger.info(
+                "Batch stats: input_ids shape=%s dtype=%s labels shape=%s dtype=%s labels[min,max]=(%s,%s) ignore_ratio=%.4f",
+                tuple(input_ids.shape),
+                input_ids.dtype,
+                tuple(labels.shape),
+                labels.dtype,
+                labels.min().item(),
+                labels.max().item(),
+                ignore_ratio,
+            )
+            if torch.isnan(input_ids.float()).any():
+                logger.warning("NaN detected in input_ids")
+            if torch.isnan(labels.float()).any():
+                logger.warning("NaN detected in labels")
+
+        if images is not None:
+            logger.info(
+                "Batch stats: images shape=%s dtype=%s images[min,max,mean]=(%s,%s,%.6f)",
+                tuple(images.shape),
+                images.dtype,
+                images.min().item(),
+                images.max().item(),
+                images.float().mean().item(),
+            )
+            if torch.isnan(images.float()).any():
+                logger.warning("NaN detected in images")
 
     def train_step(
         self, data_iterator: Iterator[tuple[dict[str, torch.Tensor], torch.Tensor]]
@@ -585,6 +644,9 @@ class Trainer(torch.distributed.checkpoint.stateful.Stateful):
                     input_dict[k] = v.to(self.device)
             labels = labels.to(self.device)
 
+            if self.step == 1:
+                self._log_batch_stats(input_dict, labels)
+
             loss = self.forward_backward_step(
                 input_dict=input_dict,
                 labels=labels,
@@ -592,6 +654,24 @@ class Trainer(torch.distributed.checkpoint.stateful.Stateful):
                 global_valid_tokens=global_valid_tokens,
             )
             accumulated_losses.append(loss.detach())
+
+        if self.step == 1:
+            found_bad = False
+            for m in self.model_parts:
+                for name, p in m.named_parameters():
+                    if p.grad is None:
+                        continue
+                    if not torch.isfinite(p.grad).all():
+                        logger.warning(
+                            "Non-finite gradient detected in %s: min=%s max=%s",
+                            name,
+                            p.grad.float().min().item(),
+                            p.grad.float().max().item(),
+                        )
+                        found_bad = True
+                        break
+                if found_bad:
+                    break
 
         grad_norm = dist_utils.clip_grad_norm_(
             [p for m in self.model_parts for p in m.parameters()],
