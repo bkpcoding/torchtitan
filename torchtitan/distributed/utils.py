@@ -391,6 +391,49 @@ def set_pg_timeouts(
 
 
 @torch.no_grad()
+def _compute_total_norm_fp64(
+    grads: list[torch.Tensor | DTensor], norm_type: float
+) -> torch.Tensor:
+    """
+    Compute gradient norm in float64 to avoid overflow when grads are finite but large.
+    """
+    if not grads:
+        return torch.tensor(0.0)
+
+    ref = grads[0].full_tensor() if isinstance(grads[0], DTensor) else grads[0]
+    device = ref.device
+
+    if math.isinf(norm_type):
+        max_norm = torch.zeros((), dtype=torch.float64, device=device)
+        for g in grads:
+            t = g.full_tensor() if isinstance(g, DTensor) else g
+            t = t.detach()
+            if t.is_sparse:
+                t = t.coalesce().values()
+            max_norm = torch.maximum(max_norm, t.abs().to(torch.float64).max())
+        return max_norm.to(torch.float32)
+
+    total = torch.zeros((), dtype=torch.float64, device=device)
+    for g in grads:
+        t = g.full_tensor() if isinstance(g, DTensor) else g
+        t = t.detach()
+        if t.is_sparse:
+            t = t.coalesce().values()
+        param_norm = torch.linalg.vector_norm(t, ord=norm_type, dtype=torch.float64)
+        total += param_norm**norm_type
+    return total.pow(1.0 / norm_type).to(torch.float32)
+
+
+@torch.no_grad()
+def _all_grads_finite(grads: list[torch.Tensor | DTensor]) -> bool:
+    for g in grads:
+        t = g.full_tensor() if isinstance(g, DTensor) else g
+        if not torch.isfinite(t).all():
+            return False
+    return True
+
+
+@torch.no_grad()
 def clip_grad_norm_(
     parameters: torch.Tensor | Iterable[torch.Tensor],
     max_norm: float,
@@ -447,6 +490,11 @@ def clip_grad_norm_(
     total_norm = torch.nn.utils.get_total_norm(
         grads, norm_type, error_if_nonfinite, foreach
     )
+
+    # get_total_norm can overflow to inf with very large but finite float32 grads.
+    # Recompute in float64 to preserve clipping behavior and metric logging.
+    if not torch.isfinite(total_norm) and _all_grads_finite(grads):
+        total_norm = _compute_total_norm_fp64(grads, norm_type)
 
     # If total_norm is a DTensor, the placements must be `torch.distributed._tensor.ops.math_ops._NormPartial`.
     # We can simply reduce the DTensor to get the total norm in this tensor's process group
@@ -506,6 +554,8 @@ def _clip_grad_norm_with_ep(
     ep_grads_total_norm = torch.nn.utils.get_total_norm(
         ep_grads, norm_type, error_if_nonfinite, foreach
     )
+    if not torch.isfinite(ep_grads_total_norm) and _all_grads_finite(ep_grads):
+        ep_grads_total_norm = _compute_total_norm_fp64(ep_grads, norm_type)
     # get_total_norm returns tensor(0.) for empty list, which is a non-DTensor
     if isinstance(ep_grads_total_norm, DTensor):
         ep_grads_total_norm = ep_grads_total_norm.full_tensor()
@@ -513,6 +563,8 @@ def _clip_grad_norm_with_ep(
     non_ep_grads_total_norm = torch.nn.utils.get_total_norm(
         non_ep_grads, norm_type, error_if_nonfinite, foreach
     )
+    if not torch.isfinite(non_ep_grads_total_norm) and _all_grads_finite(non_ep_grads):
+        non_ep_grads_total_norm = _compute_total_norm_fp64(non_ep_grads, norm_type)
     # get_total_norm returns tensor(0.) for empty list, which is a non-DTensor
     if isinstance(non_ep_grads_total_norm, DTensor):
         non_ep_grads_total_norm = non_ep_grads_total_norm.full_tensor()

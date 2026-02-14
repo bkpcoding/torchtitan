@@ -126,14 +126,27 @@ class QueryEncoderAttention(nn.Module):
             key_states = key_states.repeat_interleave(self.num_key_value_groups, dim=1)
             value_states = value_states.repeat_interleave(self.num_key_value_groups, dim=1)
 
-        # Scaled dot-product attention with custom mask
-        attn_output = F.scaled_dot_product_attention(
-            query_states,
-            key_states,
-            value_states,
-            attn_mask=attention_mask,
-            dropout_p=self.attention_dropout if self.training else 0.0,
-        )
+        # Use a numerically stable attention implementation to avoid non-finite
+        # gradients seen with masked SDPA in this mixed attention pattern.
+        q = query_states.float()
+        k = key_states.float()
+        v = value_states.float()
+        attn_scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
+
+        if attention_mask is not None:
+            if attention_mask.dtype == torch.bool:
+                attn_scores = attn_scores.masked_fill(~attention_mask, float("-inf"))
+            else:
+                attn_scores = attn_scores + attention_mask.to(attn_scores.dtype)
+
+        # Stabilize softmax and sanitize any all-masked row artifacts.
+        attn_scores = attn_scores - torch.amax(attn_scores, dim=-1, keepdim=True)
+        attn_probs = torch.softmax(attn_scores, dim=-1)
+        attn_probs = torch.nan_to_num(attn_probs, nan=0.0, posinf=0.0, neginf=0.0)
+        if self.training and self.attention_dropout > 0.0:
+            attn_probs = F.dropout(attn_probs, p=self.attention_dropout)
+
+        attn_output = torch.matmul(attn_probs, v).to(query_states.dtype)
 
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.view(bsz, q_len, self.hidden_dim)
@@ -230,6 +243,8 @@ class QueryEncoder(nn.Module):
             for _ in range(args.num_layers)
         ])
 
+        # Normalize image features before entering the stacked transformer.
+        self.input_norm = RMSNorm(args.hidden_dim, eps=args.rms_norm_eps)
         self.norm = RMSNorm(args.hidden_dim, eps=args.rms_norm_eps)
 
         # Learnable query embeddings for different image sizes
@@ -247,7 +262,6 @@ class QueryEncoder(nn.Module):
         self,
         num_image_tokens: int,
         num_query_tokens: int,
-        dtype: torch.dtype,
         device: torch.device,
         batch_size: int,
     ) -> torch.Tensor:
@@ -259,32 +273,31 @@ class QueryEncoder(nn.Module):
         - Query tokens (last num_query_tokens): causal + cross-attend to ALL image tokens
 
         Returns:
-            Attention mask of shape [batch_size, 1, total_len, total_len] with
-            0.0 for allowed positions and -inf for masked positions.
+            Boolean keep-mask of shape [batch_size, 1, total_len, total_len].
+            True indicates an allowed attention position.
         """
         total_len = num_image_tokens + num_query_tokens
-        min_dtype = torch.finfo(dtype).min
 
         masks = []
         for _ in range(batch_size):
             mask = torch.full(
                 (total_len, total_len),
-                fill_value=min_dtype,
-                dtype=dtype,
+                fill_value=False,
+                dtype=torch.bool,
                 device=device,
             )
 
             # Image tokens: bi-directional (attend to all image tokens)
-            # mask[0:num_image, 0:num_image] = 0.0
-            mask[:num_image_tokens, :num_image_tokens] = 0.0
+            # mask[0:num_image, 0:num_image] = True
+            mask[:num_image_tokens, :num_image_tokens] = True
 
             # Query tokens: causal attention + cross-attend to all images
             for i in range(num_query_tokens):
                 q_idx = num_image_tokens + i
                 # Attend to all image tokens
-                mask[q_idx, :num_image_tokens] = 0.0
+                mask[q_idx, :num_image_tokens] = True
                 # Causal for query tokens (attend to self and previous queries)
-                mask[q_idx, num_image_tokens : q_idx + 1] = 0.0
+                mask[q_idx, num_image_tokens : q_idx + 1] = True
 
             masks.append(mask)
 
@@ -304,6 +317,7 @@ class QueryEncoder(nn.Module):
         """
         # Flatten spatial dimensions: [B, C, H, W] -> [B, H*W, C]
         x = image_features.flatten(2).transpose(1, 2)
+        x = self.input_norm(x)
 
         bs, num_image_tokens, _ = x.shape
 
@@ -328,7 +342,6 @@ class QueryEncoder(nn.Module):
         attention_mask = self._create_mixed_attention_mask(
             num_image_tokens=num_image_tokens,
             num_query_tokens=num_query_tokens,
-            dtype=x_combined.dtype,
             device=x_combined.device,
             batch_size=bs,
         )

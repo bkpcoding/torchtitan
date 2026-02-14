@@ -13,6 +13,7 @@ HF_HOME=/tmp/hf_cache singularity exec --nv \
     --job.custom-config-module torchtitan.custom_data_config \
     --job.config-file /opt/torchtitan/torchtitan/models/deepseek_ocr/train_configs/debug.toml \
     --model.flavor=debugmodel_full_vision \
+    --model.hf_assets_path=/opt/torchtitan/tests/assets/tokenizer \
     --data.img_size=1024 \
     --training.steps=2 \
     --training.local_batch_size=1 \
@@ -23,3 +24,4 @@ Notes:
 - Uses SynthDOG-EN streaming dataset from Hugging Face.
 - The run relies on a custom config extension: `torchtitan.custom_data_config`.
 - Uses `debugmodel_full_vision` and disables activation checkpointing for compatibility.
+- `--model.hf_assets_path` is set explicitly so the tokenizer path resolves from inside the container.
