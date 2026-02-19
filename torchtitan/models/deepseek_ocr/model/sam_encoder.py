@@ -8,6 +8,7 @@
 # Original source: https://github.com/facebookresearch/segment-anything
 
 from typing import Optional, Tuple, Type
+import os
 
 import torch
 import torch.nn as nn
@@ -429,6 +430,8 @@ class SAMViTEncoder(nn.Module):
         # Initialize position embeddings
         if self.pos_embed is not None:
             nn.init.trunc_normal_(self.pos_embed, std=0.02)
+            if os.getenv("TORCHTITAN_DISABLE_SAM_POS_EMBED_GRAD") == "1":
+                self.pos_embed.requires_grad_(False)
 
         # Initialize patch embedding
         nn.init.xavier_uniform_(self.patch_embed.proj.weight)

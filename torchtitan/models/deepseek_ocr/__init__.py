@@ -121,8 +121,17 @@ deepseek_ocr_args = {
         mscale=0.70,
         # Vision encoder (original SAM ViT-B)
         sam_encoder=SAMEncoderArgs(),  # Default = SAM ViT-B
-        # Query encoder (original Qwen2 style)
-        query_encoder=QueryEncoderArgs(),  # Default = 24 layers, 896 dim
+        # Query encoder keeps SAM-compatible hidden size, but uses shallower
+        # depth for stable single-GPU debug runs.
+        query_encoder=QueryEncoderArgs(
+            hidden_dim=896,
+            num_layers=8,
+            num_heads=14,
+            num_kv_heads=2,
+            intermediate_size=2048,
+            num_query_tokens_768=144,
+            num_query_tokens_1024=256,
+        ),
         # Projector
         projector=ProjectorArgs(projector_type="mlp_gelu"),
         vision_output_dim=896,

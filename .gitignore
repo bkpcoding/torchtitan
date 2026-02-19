@@ -15,6 +15,9 @@ wandb
 
 torchtitan/datasets/**/*.model
 
+# containers
+*.sif
+
 # hf assets
 assets/hf/*
 assets/tokenizer/*
